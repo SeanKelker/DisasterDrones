@@ -4,6 +4,7 @@ import sys
 import time
 import re
 import subprocess
+import socket
 
 STATE_DIR = '/var/lib/edison_config_tools'
 
@@ -19,6 +20,8 @@ def list_networks():
     found = [l.split("\t") for l in pipe.read().split("\n")]
     pipe.close()
     networks = {}
+
+    found_open = []
 
     WPAPSK_REGEX=re.compile(r'\[WPA[2]?-PSK-.+\]')
     WPAEAP_REGEX=re.compile(r'\[WPA[2]?-EAP-.+\]')
@@ -45,56 +48,7 @@ def list_networks():
     
     return networks
 
-def configure_network(ssid, network):
-    if network["sec"] == "OPEN":
-        return '''
-network={{
-  ssid="{0}"
-  {1}
-  key_mgmt=NONE
-}}
-'''.format(ssid, "")
-
-    elif network["sec"] == "WEP":
-        return '''
-network={{
-  ssid="{0}"
-  {1}
-  key_mgmt=NONE
-  group=WEP104 WEP40
-  wep_key0="{2}"
-}}
-'''.format(ssid, "", network["password"])
-
-    elif network["sec"] == "WPA-PSK":
-        return '''
-network={{
-  ssid="{0}"
-  {1}
-  key_mgmt=WPA-PSK
-  pairwise=CCMP TKIP
-  group=CCMP TKIP WEP104 WEP40
-  eap=TTLS PEAP TLS
-  psk="{2}"
-}}
-'''.format(ssid, "", network["password"])
-
-    elif network["sec"] == "WPA-EAP":
-        return '''
-network={{
-  ssid="{0}"
-  {1}
-  key_mgmt=WPA-EAP
-  pairwise=CCMP TKIP
-  group=CCMP TKIP WEP104 WEP40
-  eap=TTLS PEAP TLS
-  identity="{2}"
-  password="{3}"
-  phase1="peaplabel=0"
-}}
-'''.format(ssid, "", network["user"], network["password"])
-
-def connect_wifi(ssid, network):
+def connect_wifi(ssid):
     if not os.path.isfile('/etc/wpa_supplicant/wpa_supplicant.conf.original'):
         subprocess.call("cp /etc/wpa_supplicant/wpa_supplicant.conf /etc/wpa_supplicant/wpa_supplicant.conf.original", shell=True)
 
@@ -110,7 +64,13 @@ manufacturer=Intel
 model_name=Edison
 """
     wpa_supplicant.write(header)
-    wpa_supplicant.write(configure_network(ssid, network))
+    wpa_supplicant.write('''
+network={{
+  ssid="{0}"
+  {1}
+  key_mgmt=NONE
+}}
+'''.format(ssid, ""))
     wpa_supplicant.close()
 
     print("Updated supplicant file")
@@ -137,10 +97,12 @@ model_name=Edison
         print(e)
         print("Sorry. Could not get an IP address.")
 
-    pipe = os.popen("ifconfig | grep -A1 'wlan0' | grep 'inet'| awk -F' ' '{ print $2 }' | awk -F':' '{ print $2 }'")
-    addr = pipe.read().rstrip()
+    time.sleep(1)
+
+    pipe = os.popen("iwgetid -r")
+    ssid = pipe.read().rstrip()
     pipe.close()
-    return addr
+    return ssid
 
 def get_current_config():
     pipe = os.popen("iwgetid -r")
@@ -175,7 +137,7 @@ def get_current_config():
                 line = wpa_supplicant.readline()
             if cssid == ssid:
                 if "password" not in conf:
-                    conf["security"] = "OPEN"
+                    conf["sec"] = "OPEN"
                 conf["ssid"] = ssid
                 wpa_supplicant.close()
                 return conf
@@ -189,17 +151,68 @@ def get_current_config():
 # dd-wrt WPA-PSK c242wifi
 # c242-router-1
 
-# n = sys.argv[1]
+n = sys.argv[1]
+
+if len(sys.argv) > 2:
+    new_address = connect_wifi(n)
+    print("addr:", new_address)
+    sys.exit(0)
+    
 # sec = sys.argv[3]
 # passwd = sys.argv[2]
 
-print(get_current_config())
+old_network = get_current_config()
 
-# while True:
-#     networks = list_networks()
-#     if
+networks = {}
 
+while n not in networks:
+    networks = list_networks()
 
-# new_address = connect_wifi(n, networks[n])
-# print("Selected new network")
-# print(new_address)
+if networks[n]["sec"] != "OPEN":
+    print("Only open wifi networks can be hot swapped")
+    sys.exit(1)
+
+print("network found, swapping")
+new_address = connect_wifi(n)
+print("Networks swapped, data will be pushed")
+print("new ssid:", new_address)
+
+broadcast = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+broadcast.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+
+broadcast.sendto(
+    b"Req Dump",
+    ('255.255.255.255',(242*106)^(1337))
+)
+
+com = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+com.bind(('',(242*106)^(1337)))
+
+data = com.recvfrom(1024)
+while data[0].decode('ascii')[0] != "~":
+    data = com.recvfrom(1024)
+    
+com.close()
+
+print("Got dump:", data[0].decode('ascii'))
+
+recv_data = open('data_file.dat','r')
+
+broadcast.sendto(
+    b"~" + str.encode(''.join(recv_data.readlines())),
+    (data[1][0],(242*106)^(1337))
+)
+
+recv_data.close()
+
+recv_data = open('data_file.dat','a+')
+
+recv_data.write(data[0].decode('ascii') + '\n')
+
+recv_data.close()
+broadcast.close()
+
+print(old_network)
+new_address = connect_wifi(old_network["ssid"])
+print("Network back")
+print("returned ssid:", new_address)
