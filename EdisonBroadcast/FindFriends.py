@@ -5,6 +5,8 @@ import time
 import re
 import subprocess
 import socket
+import threading
+import select
 
 STATE_DIR = '/var/lib/edison_config_tools'
 
@@ -144,7 +146,6 @@ def get_current_config():
         line = wpa_supplicant.readline()
     wpa_supplicant.close()
     return None
-    
 
 # hack4humanity OPEN
 # NiceMeme.jpg WPA-PSK datboi12345!!
@@ -177,6 +178,42 @@ new_address = connect_wifi(n)
 print("Networks swapped, data will be pushed")
 print("new ssid:", new_address)
 
+n_sent = 0
+n_recv = 0
+
+pass_other = None
+
+def listen_for_pass():
+    global n_recv
+    global pass_other
+    passing = True
+    com = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    com.bind(('',(242*106)^(1337)))
+    com.settimeout(10)
+    with open('data_file_new.dat','w+') as recv_data:
+        while passing:
+            try:
+                data = com.recvfrom(1024)
+                if pass_other is None:
+                    pass_other = data[1][0]
+                msg = data[0].decode('ascii')
+                if msg[0] != "~":
+                    continue
+                if msg == "~term":
+                    print("Thats a term, terming")
+                    passing = False
+                    break
+
+                recv_data.write(msg + '\n')
+
+                n_recv += 1
+            except Exception as e:
+                passing = False
+                break
+                print("Listen timed out")
+    print("Listen done")
+    com.close()
+
 broadcast = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 broadcast.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
@@ -185,34 +222,66 @@ broadcast.sendto(
     ('255.255.255.255',(242*106)^(1337))
 )
 
-com = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-com.bind(('',(242*106)^(1337)))
+thr = threading.Thread(target=listen_for_pass, args=(), kwargs={})
+thr.daemon = True
+thr.start()
 
-data = com.recvfrom(1024)
-while data[0].decode('ascii')[0] != "~":
-    data = com.recvfrom(1024)
-    
-com.close()
+recv_data = None
 
-print("Got dump:", data[0].decode('ascii'))
+start_t = time.time()
 
-recv_data = open('data_file.dat','r')
+while pass_other is None:
+    time.sleep(1)
+    if start_t + 30 < time.time():
+        break
 
-broadcast.sendto(
-    b"~" + str.encode(''.join(recv_data.readlines())),
-    (data[1][0],(242*106)^(1337))
-)
+print("Spin lock exiting")
 
-recv_data.close()
+try:
+    recv_data = open('data_file.dat','r')
 
-recv_data = open('data_file.dat','a+')
+    for line in recv_data.readlines():
+        try:
+            sent = broadcast.sendto(
+                b"~" + str.encode(line.strip()),
+                (pass_other,(242*106)^(1337))
+            )
+            n_sent += 1
+        finally:
+            try:
+                sent = broadcast.sendto(
+                    b"~term",
+                    (pass_other,(242*106)^(1337))
+                )
+            except Exception as ex:
+                print("Pass terminated early without ~term sent")
+            break
+except Exception:
+    print("data_file.dat not found, not data will be sent")
+finally:
+    if pass_other is not None:
+        sent = broadcast.sendto(
+            b"~term",
+            (pass_other,(242*106)^(1337))
+        )
+    pass_other = None
+    if recv_data is not None:
+        recv_data.close()
 
-recv_data.write(data[0].decode('ascii') + '\n')
-
-recv_data.close()
 broadcast.close()
 
+thr.join()
+
+new_dat = open('data_file_new.dat','r+')
+old_dat = open('data_file.dat', 'a+')
+
+for line in new_dat:
+    old_dat.write(line)
+
+new_dat.close()
+old_dat.close()
+
+print("Pass complete\n{0} records sent, {1} records recv".format(n_sent, n_recv))
 print(old_network)
 new_address = connect_wifi(old_network["ssid"])
-print("Network back")
 print("returned ssid:", new_address)
