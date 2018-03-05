@@ -1,0 +1,43 @@
+doctype html
+html#html
+  head
+    title Response Map
+    style.
+      /* Always set the map height explicitly to define the size of the div
+      * element that contains the map. */
+      #map {
+        height: 100%;
+      }
+      /* Optional: Makes the sample page fill the window. */
+      html, body {
+        height: 100%;
+        margin: 0;
+        padding: 0;
+      }
+  body#body
+    #map
+    //- script(src='javascripts/map.js')
+    script.
+      function initMap() {
+        people = !{people}
+        var map = new google.maps.Map(document.getElementById('map'), {
+          zoom: 10,
+          center: {lat: people[0][0], lng: people[0][1]}
+        });
+        people.forEach(function(e){
+          console.log(e)
+          var contentString = e[2] + ' needs help:\nstatus:' + e[3];
+          var infowindow = new google.maps.InfoWindow({
+            content: contentString
+          });
+          var marker = new google.maps.Marker({
+            position: {lat: e[0], lng: e[1]},
+            map: map,
+            title: e[2]
+          });
+          marker.addListener('click', function() {
+            infowindow.open(map, marker);
+          });
+        });
+      }
+    script(async='', defer='', src='https://maps.googleapis.com/maps/api/js?key=AIzaSyAMSO3EGjUuBrRAAL94YKN842iCOfjUD4U&callback=initMap')

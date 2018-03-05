@@ -15,7 +15,6 @@ def listen_clients():
             data = s.recvfrom(1024)
             msg = data[0].decode('ascii')
             if msg == "Ping":
-                print("hit")
                 reply = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 reply.sendto(
                     str.encode("~" + static_reply),
@@ -23,6 +22,7 @@ def listen_clients():
                 )
                 reply.close()
             else:
+                print("hit:",msg)
                 mutex.acquire()
                 recv_data = open('data_file.dat','a+')
                 recv_data.write(msg + "\n")
